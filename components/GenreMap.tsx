@@ -132,18 +132,20 @@ export default function GenreMap() {
   // Handle Spotify Auth redirect/callback and persistence
   useEffect(() => {
     if (typeof window !== 'undefined') {
-      // 1. Check for token in URL hash (just after redirect)
-      const hash = window.location.hash;
-      if (hash) {
-        const token = hash.substring(1).split('&').find(elem => elem.startsWith('access_token'))?.split('=')[1];
-        if (token) {
-          setAccessToken(token);
-          localStorage.setItem('spotify_access_token', token);
-          window.location.hash = "";
-          fetchUserTopArtists(token);
-        }
+      const urlParams = new URLSearchParams(window.location.search);
+      const code = urlParams.get('code');
+      const error = urlParams.get('error');
+
+      if (code) {
+        console.log("DEBUG: Authorization code found. Swapping for token...");
+        swapCodeForToken(code);
+        // Clean URL
+        const newUrl = window.location.origin + window.location.pathname;
+        window.history.replaceState({}, document.title, newUrl);
+      } else if (error) {
+        console.error("DEBUG: Spotify returned an error:", error);
+        alert(`Spotify Connection Error: ${error}`);
       }
-      // 2. Check for existing token in localStorage
       else {
         const storedToken = localStorage.getItem('spotify_access_token');
         if (storedToken) {
@@ -153,6 +155,29 @@ export default function GenreMap() {
       }
     }
   }, []);
+
+  const swapCodeForToken = async (code: string) => {
+    const REDIRECT_URI = window.location.origin.replace('localhost', '127.0.0.1');
+    try {
+      const response = await fetch('/api/spotify/swap', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ code, redirect_uri: REDIRECT_URI }),
+      });
+      const data = await response.json();
+      if (data.access_token) {
+        setAccessToken(data.access_token);
+        localStorage.setItem('spotify_access_token', data.access_token);
+        fetchUserTopArtists(data.access_token);
+        setShowLoginPrompt(false);
+      } else {
+        console.error("DEBUG: Token swap failed:", data);
+        alert(`Swap failed: ${data.error_description || data.error}`);
+      }
+    } catch (err) {
+      console.error("DEBUG: Error calling swap API:", err);
+    }
+  };
 
   // Automatically fetch expanded artists when a genre is selected if authenticated
   useEffect(() => {
@@ -178,17 +203,19 @@ export default function GenreMap() {
   };
 
   const handleSpotifyLogin = () => {
-    const CLIENT_ID = process.env.NEXT_PUBLIC_SPOTIFY_CLIENT_ID || "YOUR_CLIENT_ID";
+    const CLIENT_ID = process.env.NEXT_PUBLIC_SPOTIFY_CLIENT_ID;
+
+    if (!CLIENT_ID || CLIENT_ID === "YOUR_CLIENT_ID") {
+      alert("CRITICAL ERROR: Spotify Client ID not found. \n\n1. Check your .env.local file. \n2. RESTART your terminal (npm run dev) to load the new ID.");
+      return;
+    }
+
     const REDIRECT_URI = window.location.origin.replace('localhost', '127.0.0.1');
     const AUTH_ENDPOINT = "https://accounts.spotify.com/authorize";
-    const RESPONSE_TYPE = "token";
+    const RESPONSE_TYPE = "code";
     const SCOPES = "user-top-read";
 
     const authUrl = `${AUTH_ENDPOINT}?client_id=${CLIENT_ID}&redirect_uri=${encodeURIComponent(REDIRECT_URI)}&response_type=${RESPONSE_TYPE}&scope=${SCOPES}`;
-    console.log("Starting Spotify Auth Flow:");
-    console.log("- Client ID:", CLIENT_ID);
-    console.log("- Redirect URI:", REDIRECT_URI);
-    console.log("- Full URL:", authUrl);
 
     window.location.href = authUrl;
   };
@@ -209,6 +236,7 @@ export default function GenreMap() {
     if (!selectedGenre) return;
 
     setIsExpanding(true);
+    console.log(`Searching Spotify for genre: "${selectedGenre.id}"`);
     try {
       const response = await fetch(`https://api.spotify.com/v1/search?q=genre:"${selectedGenre.id}"&type=artist&limit=30`, {
         headers: { Authorization: `Bearer ${accessToken}` }
@@ -571,6 +599,7 @@ export default function GenreMap() {
             <p className="text-zinc-500 text-xs mb-8 leading-relaxed uppercase tracking-widest">To reveal the truth beyond the dataset and see your own footprints in this genre, we need to bridge your Spotify consciousness.</p>
             <div className="flex flex-col gap-4">
               <button
+                type="button"
                 onClick={handleSpotifyLogin}
                 className="w-full py-5 bg-[#1DB954] text-black font-black uppercase tracking-[0.3em] text-[10px] rounded-2xl hover:scale-[1.02] active:scale-[0.98] transition-all"
               >
