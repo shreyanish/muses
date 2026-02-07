@@ -43,10 +43,13 @@ export default function GenreMap() {
   const [searchQuery, setSearchQuery] = useState("");
   const [isClient, setIsClient] = useState(false);
   const [accessToken, setAccessToken] = useState<string | null>(null);
+  const [refreshToken, setRefreshToken] = useState<string | null>(null);
   const [userTopArtists, setUserTopArtists] = useState<Set<string>>(new Set());
   const [expandedArtists, setExpandedArtists] = useState<any[]>([]);
   const [isExpanding, setIsExpanding] = useState(false);
   const [showLoginPrompt, setShowLoginPrompt] = useState(false);
+  const [tasteProfile, setTasteProfile] = useState<any>(null);
+  const [genreScoresMap, setGenreScoresMap] = useState<Map<string, number>>(new Map());
 
   // Graph state
   const nodesRef = useRef<Node[]>([]);
@@ -150,6 +153,31 @@ export default function GenreMap() {
         const storedToken = localStorage.getItem('spotify_access_token');
         if (storedToken) {
           setAccessToken(storedToken);
+          const storedRefresh = localStorage.getItem('spotify_refresh_token');
+          if (storedRefresh) {
+            setRefreshToken(storedRefresh);
+          }
+          
+          // Load stored taste profile if available
+          const storedProfile = localStorage.getItem('user_taste_profile');
+          if (storedProfile) {
+            try {
+              const profile = JSON.parse(storedProfile);
+              setTasteProfile(profile);
+              
+              // Recreate genre scores map
+              const scoresMap = new Map<string, number>();
+              if (profile.genreScores) {
+                profile.genreScores.forEach((item: any) => {
+                  scoresMap.set(item.genre, item.score);
+                });
+              }
+              setGenreScoresMap(scoresMap);
+            } catch (err) {
+              console.error("Failed to parse stored taste profile:", err);
+            }
+          }
+          
           fetchUserTopArtists(storedToken);
         }
       }
@@ -167,7 +195,17 @@ export default function GenreMap() {
       const data = await response.json();
       if (data.access_token) {
         setAccessToken(data.access_token);
+        if (data.refresh_token) {
+          setRefreshToken(data.refresh_token);
+        }
         localStorage.setItem('spotify_access_token', data.access_token);
+        if (data.refresh_token) {
+          localStorage.setItem('spotify_refresh_token', data.refresh_token);
+        }
+        
+        // Build and save taste profile
+        await buildAndSaveTasteProfile(data.access_token, data.refresh_token);
+        
         fetchUserTopArtists(data.access_token);
         setShowLoginPrompt(false);
       } else {
@@ -202,6 +240,51 @@ export default function GenreMap() {
     }
   };
 
+  const buildAndSaveTasteProfile = async (accessToken: string, refreshToken?: string) => {
+    try {
+      console.log("🎵 Building taste profile from Spotify data...");
+      const response = await fetch('/api/spotify/taste-profile', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          accessToken,
+          refreshToken,
+          timeRange: 'medium_term'
+        })
+      });
+
+      if (!response.ok) {
+        const error = await response.text();
+        console.error("❌ Taste profile API error:", error);
+        throw new Error(`Failed to build taste profile: ${response.statusText}`);
+      }
+
+      const profile = await response.json();
+      console.log("✅ Taste profile created:", profile);
+      console.log("📊 Genre scores count:", profile.genreScores?.length || 0);
+      console.log("🎯 Top genres:", profile.topGenres);
+      
+      // Store the profile locally for immediate use
+      setTasteProfile(profile);
+      
+      // Create a genre scores map for quick lookup
+      const scoresMap = new Map<string, number>();
+      if (profile.genreScores) {
+        profile.genreScores.forEach((item: any) => {
+          scoresMap.set(item.genre, item.score);
+        });
+      }
+      console.log("📍 Genre scores map size:", scoresMap.size);
+      console.log("🔝 Top 5 scored genres:", Array.from(scoresMap.entries()).slice(0, 5));
+      setGenreScoresMap(scoresMap);
+      
+      localStorage.setItem('user_taste_profile', JSON.stringify(profile));
+      console.log("💾 Taste profile saved to localStorage");
+    } catch (err) {
+      console.error("❌ Error building taste profile:", err);
+    }
+  };
+
   const handleSpotifyLogin = () => {
     const CLIENT_ID = process.env.NEXT_PUBLIC_SPOTIFY_CLIENT_ID;
 
@@ -222,8 +305,13 @@ export default function GenreMap() {
 
   const handleSpotifyLogout = () => {
     setAccessToken(null);
+    setRefreshToken(null);
     localStorage.removeItem('spotify_access_token');
+    localStorage.removeItem('spotify_refresh_token');
+    localStorage.removeItem('user_taste_profile');
     setUserTopArtists(new Set());
+    setTasteProfile(null);
+    setGenreScoresMap(new Map());
     setExpandedArtists([]);
   };
 
@@ -279,16 +367,45 @@ export default function GenreMap() {
     // Draw nodes
     nodesRef.current.forEach(node => {
       const isMatch = searchQuery && node.id.toLowerCase().includes(searchQuery.toLowerCase());
+      const genreScore = genreScoresMap.get(node.id) || 0; // 0-1 relevance score from user's taste
+      const isRelevant = genreScore > 0.1; // Genre is relevant if score > 0.1
 
-      ctx.fillStyle = node.c;
+      // Dynamic radius based on search match or genre relevance
+      let radius = 6;
+      let opacity = 0.5;
+      
+      if (isMatch) {
+        radius = 30;
+        opacity = 1;
+      } else if (isRelevant) {
+        // Scale radius from 8 to 20 based on genre score
+        radius = 8 + genreScore * 12;
+        opacity = 0.6 + genreScore * 0.4;
+      }
+
+      // Base color with taste-based brightness adjustment
+      const baseColor = node.c;
+      const rgb = parseInt(baseColor.replace('#', ''), 16);
+      const r = (rgb >> 16) & 255;
+      const g = (rgb >> 8) & 255;
+      const b = rgb & 255;
+      
+      // Brighten color if genre is relevant to user's taste
+      const brightenFactor = isRelevant ? 1 + genreScore * 0.5 : 1;
+      const brightR = Math.min(255, Math.round(r * brightenFactor));
+      const brightG = Math.min(255, Math.round(g * brightenFactor));
+      const brightB = Math.min(255, Math.round(b * brightenFactor));
+      const displayColor = `rgba(${brightR}, ${brightG}, ${brightB}, ${opacity})`;
+
+      ctx.fillStyle = displayColor;
       ctx.beginPath();
-      const radius = isMatch ? 30 : 6;
       ctx.arc(node.x!, node.y!, radius / transform.current.scale, 0, Math.PI * 2);
       ctx.fill();
 
       if (transform.current.scale > 0.4 || isMatch) {
         ctx.font = `${14 / transform.current.scale}px Inter, sans-serif`;
         ctx.textAlign = 'center';
+        ctx.fillStyle = isRelevant ? `rgba(${brightR}, ${brightG}, ${brightB}, 1)` : `rgba(255, 255, 255, 0.7)`;
         ctx.fillText(node.id, node.x!, node.y! + (18 / transform.current.scale));
       }
     });
@@ -424,7 +541,7 @@ export default function GenreMap() {
       <div className="pointer-events-none absolute inset-0 flex flex-col justify-between p-8">
         <div className="pointer-events-auto flex items-start justify-between">
           <div className="glass-panel p-6 rounded-2xl bg-zinc-900/40 backdrop-blur-2xl border border-white/10 shadow-2xl">
-            <h1 className="text-5xl font-extrabold tracking-tighter bg-gradient-to-b from-white via-white to-zinc-600 bg-clip-text text-transparent">Every Noise</h1>
+            <h1 className="text-5xl font-extrabold tracking-tighter bg-linear-to-b from-white via-white to-zinc-600 bg-clip-text text-transparent">Every Noise</h1>
             <p className="text-zinc-500 text-[10px] uppercase tracking-[0.5em] mt-2 font-bold italic">Interactive Physics Graph</p>
           </div>
 
@@ -448,7 +565,7 @@ export default function GenreMap() {
         </div>
 
         <div className="flex justify-between items-end">
-          <div className="bg-zinc-900/60 p-8 backdrop-blur-2xl rounded-[2rem] border border-white/10 min-w-[320px] shadow-[0_0_50px_rgba(0,0,0,0.5)]">
+          <div className="bg-zinc-900/60 p-8 backdrop-blur-2xl rounded-4xl border border-white/10 min-w-[320px] shadow-[0_0_50px_rgba(0,0,0,0.5)]">
             <h3 className="text-[10px] uppercase tracking-[0.3em] text-zinc-600 font-black mb-3">Exploring Universe</h3>
             <p className="text-3xl font-light tracking-tight text-zinc-100">{hoveredGenre ? hoveredGenre.id : (selectedGenre ? selectedGenre.id : "Deep Space")}</p>
             {(hoveredGenre || selectedGenre) && (
@@ -472,7 +589,7 @@ export default function GenreMap() {
 
       {/* Detail Panel */}
       {selectedGenre && (
-        <div className="absolute right-0 top-0 h-full w-[400px] bg-zinc-950/80 backdrop-blur-3xl border-l border-white/10 p-10 overflow-y-auto z-40 animate-slide-in">
+        <div className="absolute right-0 top-0 h-full w-100 bg-zinc-950/80 backdrop-blur-3xl border-l border-white/10 p-10 overflow-y-auto z-40 animate-slide-in">
           <button
             onClick={() => setSelectedGenre(null)}
             className="absolute top-8 right-8 text-zinc-500 hover:text-white transition-colors"
@@ -497,7 +614,7 @@ export default function GenreMap() {
                     <span className="text-zinc-400">{key}</span>
                     <span className="text-white font-mono">{typeof val === 'number' ? (key === 'Tempo' ? Math.round(val) : (val * 100).toFixed(0) + '%') : val}</span>
                   </div>
-                  <div className="h-[3px] bg-white/5 rounded-full overflow-hidden">
+                  <div className="h-0.75 bg-white/5 rounded-full overflow-hidden">
                     <div
                       className="h-full bg-white transition-all duration-1000"
                       style={{
@@ -513,6 +630,52 @@ export default function GenreMap() {
               )}
             </div>
           </section>
+
+          {tasteProfile && (
+            <section className="mb-12 p-4 rounded-lg bg-white/5 border border-white/10">
+              <h3 className="text-[10px] uppercase tracking-[0.3em] text-cyan-400 font-black mb-4 flex items-center gap-2">
+                <div className="w-1.5 h-1.5 rounded-full bg-cyan-400" />
+                Your Taste Match
+              </h3>
+              <div className="space-y-3">
+                <div>
+                  <div className="flex justify-between text-[10px] mb-1">
+                    <span className="text-zinc-400">Genre Relevance</span>
+                    <span className="text-cyan-400 font-mono">{(((genreScoresMap.get(selectedGenre.id) || 0) * 100).toFixed(1))}%</span>
+                  </div>
+                  <div className="h-0.5 bg-white/5 rounded-full overflow-hidden">
+                    <div
+                      className="h-full bg-cyan-500 transition-all duration-500"
+                      style={{ width: `${(genreScoresMap.get(selectedGenre.id) || 0) * 100}%` }}
+                    />
+                  </div>
+                </div>
+                {tasteProfile.audioFeatures && (
+                  <div className="mt-3 pt-3 border-t border-white/5">
+                    <p className="text-[9px] text-zinc-500 mb-2 uppercase tracking-widest">Your Audio Profile</p>
+                    <div className="grid grid-cols-2 gap-2 text-[9px]">
+                      <div className="flex justify-between">
+                        <span className="text-zinc-600">Energy:</span>
+                        <span className="text-cyan-300 font-mono">{(tasteProfile.audioFeatures.energy * 100).toFixed(0)}%</span>
+                      </div>
+                      <div className="flex justify-between">
+                        <span className="text-zinc-600">Danceability:</span>
+                        <span className="text-cyan-300 font-mono">{(tasteProfile.audioFeatures.danceability * 100).toFixed(0)}%</span>
+                      </div>
+                      <div className="flex justify-between">
+                        <span className="text-zinc-600">Valence:</span>
+                        <span className="text-cyan-300 font-mono">{(tasteProfile.audioFeatures.valence * 100).toFixed(0)}%</span>
+                      </div>
+                      <div className="flex justify-between">
+                        <span className="text-zinc-600">Acousticness:</span>
+                        <span className="text-cyan-300 font-mono">{(tasteProfile.audioFeatures.acousticness * 100).toFixed(0)}%</span>
+                      </div>
+                    </div>
+                  </div>
+                )}
+              </div>
+            </section>
+          )}
 
           <section>
             <h3 className="text-[10px] uppercase tracking-[0.3em] text-zinc-600 font-black mb-6">
@@ -590,7 +753,7 @@ export default function GenreMap() {
 
       {/* Login Prompt Modal */}
       {showLoginPrompt && (
-        <div className="absolute inset-0 flex items-center justify-center bg-black/90 backdrop-blur-xl z-[60] p-6 text-center animate-in fade-in duration-300">
+        <div className="absolute inset-0 flex items-center justify-center bg-black/90 backdrop-blur-xl z-60 p-6 text-center animate-in fade-in duration-300">
           <div className="max-w-md p-12 rounded-[3rem] bg-zinc-900 border border-white/10 shadow-[0_0_100px_rgba(0,0,0,0.8)]">
             <div className="h-20 w-20 bg-[#1DB954]/10 rounded-full flex items-center justify-center mx-auto mb-8 border border-[#1DB954]/20">
               <svg viewBox="0 0 24 24" width="40" height="40" fill="#1DB954"><path d="M12 0C5.373 0 0 5.373 0 12s5.373 12 12 12 12-5.373 12-12S17.627 0 12 0zm5.49 17.306c-.215.353-.674.463-1.026.248-2.846-1.738-6.427-2.13-10.647-1.168-.403.093-.813-.157-.905-.56-.092-.403.157-.813.56-.905 4.624-1.057 8.575-.61 11.77 1.343.352.215.462.674.248 1.026zm1.465-3.264c-.27.439-.844.58-1.284.31-3.257-2-8.223-2.583-12.073-1.414-.495.15-.494.15-.644-.344-.15-.494.15-.493.644-.643 4.397-1.334 9.873-.67 13.647 1.65.44.27.58.844.31 1.284zm.126-3.414c-3.906-2.32-10.334-2.533-14.075-1.397-.597.18-.596.18-.777-.417-.18-.597.18-.596.777-.777 4.298-1.304 11.404-1.053 15.93 1.631.54.32.71.1.39.64-.32.54-.1.71-.64.39z" /></svg>
