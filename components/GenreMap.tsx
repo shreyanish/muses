@@ -642,7 +642,8 @@ export default function GenreMap() {
       ctx.fill();
 
       // Text rendering
-      if (transform.current.scale > 0.4 || isMatch) {
+      const zoomThreshold = isRelevant ? 0.3 : 0.9;
+      if (transform.current.scale > zoomThreshold || isMatch) {
         ctx.font = `${14 / transform.current.scale}px Inter, sans-serif`;
         ctx.textAlign = 'center';
 
@@ -1014,11 +1015,77 @@ export default function GenreMap() {
             </section>
           )}
 
+          {/* Guest / Curiosity Section - Shown when not logged in */}
+          {!accessToken && (
+            <section className="mb-12">
+              <div className="p-8 rounded-3xl bg-white/5 border border-white/10 backdrop-blur-xl relative overflow-hidden group">
+                {/* Background Glow */}
+                <div className="absolute -top-24 -right-24 w-48 h-48 bg-cyan-500/10 blur-[60px] group-hover:bg-cyan-500/20 transition-all duration-700" />
+
+                <h3 className="text-[10px] uppercase tracking-[0.4em] text-zinc-500 font-black mb-6 flex items-center gap-2">
+                  <div className="w-1 h-1 rounded-full bg-zinc-500" />
+                  Cosmic Identity Missing
+                </h3>
+
+                <p className="text-sm font-medium text-zinc-300 leading-relaxed mb-8">
+                  Connect your <span className="text-white font-bold">Spotify</span> to unlock your personalized alignment with this genre universe.
+                </p>
+
+                <div className="space-y-6 mb-10">
+                  <div className="flex items-center gap-4 group/item">
+                    <div className="w-10 h-10 rounded-xl bg-white/5 flex items-center justify-center text-zinc-500 group-hover/item:text-cyan-400 group-hover/item:bg-cyan-400/10 transition-all">
+                      <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 20v-6M9 20v-10M15 20v-2M18 20v-8M21 20v-4M6 20v-14M3 20v-2" /></svg>
+                    </div>
+                    <div>
+                      <p className="text-[11px] font-bold text-white mb-0.5">Listening Analytics</p>
+                      <p className="text-[10px] text-zinc-500 italic">See your rank and match percentage</p>
+                    </div>
+                  </div>
+
+                  <div className="flex items-center gap-4 group/item">
+                    <div className="w-10 h-10 rounded-xl bg-white/5 flex items-center justify-center text-zinc-500 group-hover/item:text-purple-400 group-hover/item:bg-purple-400/10 transition-all">
+                      <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="3" /><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z" /></svg>
+                    </div>
+                    <div>
+                      <p className="text-[11px] font-bold text-white mb-0.5">Artist Mapping</p>
+                      <p className="text-[10px] text-zinc-500 italic">Find your top artists in this map</p>
+                    </div>
+                  </div>
+
+                  {comparisonMode && (
+                    <div className="flex items-center gap-4 group/item">
+                      <div className="w-10 h-10 rounded-xl bg-white/5 flex items-center justify-center text-zinc-500 group-hover/item:text-red-400 group-hover/item:bg-red-400/10 transition-all">
+                        <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2" /><circle cx="9" cy="7" r="4" /><path d="M23 21v-2a4 4 0 0 0-3-3.87" /><path d="M16 3.13a4 4 0 0 1 0 7.75" /></svg>
+                      </div>
+                      <div>
+                        <p className="text-[11px] font-bold text-white mb-0.5">Social Comparison</p>
+                        <p className="text-[10px] text-zinc-500 italic">See if you match with {friendProfile?.displayName || "your friend"}</p>
+                      </div>
+                    </div>
+                  )}
+                </div>
+
+                <button
+                  onClick={handleSpotifyLogin}
+                  className="w-full py-4 bg-white text-black hover:bg-zinc-200 rounded-2xl text-xs font-black uppercase tracking-widest transition-all flex items-center justify-center gap-3 group/btn"
+                >
+                  <svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor">
+                    <path d="M12 0C5.373 0 0 5.373 0 12s5.373 12 12 12 12-5.373 12-12S18.627 0 12 0zm5.503 17.291c-.223.367-.704.484-1.071.261-2.973-1.815-6.717-2.227-11.127-1.221-.419.096-.84-.171-.937-.591-.096-.419.171-.84.591-.937 4.828-1.103 8.953-.618 12.28 1.417.368.223.484.704.264 1.071zm1.469-3.264c-.282.457-.881.605-1.338.323-3.404-2.091-8.591-2.701-12.614-1.482-.516.156-1.063-.141-1.221-.659-.156-.516.141-1.063.659-1.221 4.593-1.393 10.311-.715 14.211 1.678.457.282.605.881.303 1.384zm.127-3.413c-4.083-2.427-10.8-2.651-14.71-1.465-.626.19-1.29-.166-1.48-.792-.19-.626.166-1.29.792-1.48 4.493-1.365 11.916-1.1 16.6 1.685.563.334.749 1.06.415 1.623-.334.563-1.06.749-1.617.429z" />
+                  </svg>
+                  Connect Spotify
+                </button>
+              </div>
+            </section>
+          )}
+
           {/* Artists Listened To (Personal & Social) - MOVED UP */}
           <div className="mb-12">
             {(() => {
               if (!selectedGenre) return null;
               const genreIdLower = selectedGenre.id.toLowerCase();
+
+              // Only show personal artists if we have a profile to match against
+              if (!tasteProfile && !friendProfile) return null;
 
               // Improved matching for Spotify genres
               const isGenreMatch = (artistGenres: string[], target: string) => {
