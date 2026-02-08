@@ -45,11 +45,23 @@ export default function GenreMap() {
   const [accessToken, setAccessToken] = useState<string | null>(null);
   const [refreshToken, setRefreshToken] = useState<string | null>(null);
   const [userTopArtists, setUserTopArtists] = useState<Set<string>>(new Set());
+  const [userTopTracks, setUserTopTracks] = useState<Set<string>>(new Set());
+  const [userGenres, setUserGenres] = useState<Set<string>>(new Set());
+  const [isLoadingUserData, setIsLoadingUserData] = useState(false);
   const [expandedArtists, setExpandedArtists] = useState<any[]>([]);
   const [isExpanding, setIsExpanding] = useState(false);
   const [showLoginPrompt, setShowLoginPrompt] = useState(false);
+  const [genreTracks, setGenreTracks] = useState<any[]>([]);
+  const [genreRecommendations, setGenreRecommendations] = useState<any[]>([]);
   const [tasteProfile, setTasteProfile] = useState<any>(null);
   const [genreScoresMap, setGenreScoresMap] = useState<Map<string, number>>(new Map());
+
+  // Social Comparison State
+  const [friendProfile, setFriendProfile] = useState<any>(null);
+  const [friendGenreScoresMap, setFriendGenreScoresMap] = useState<Map<string, number>>(new Map());
+  const [comparisonMode, setComparisonMode] = useState(false);
+  const [tasteMatchScore, setTasteMatchScore] = useState(0);
+  const [showUserMenu, setShowUserMenu] = useState(false);
 
   // Graph state
   const nodesRef = useRef<Node[]>([]);
@@ -157,14 +169,14 @@ export default function GenreMap() {
           if (storedRefresh) {
             setRefreshToken(storedRefresh);
           }
-          
+
           // Load stored taste profile if available
           const storedProfile = localStorage.getItem('user_taste_profile');
           if (storedProfile) {
             try {
               const profile = JSON.parse(storedProfile);
               setTasteProfile(profile);
-              
+
               // Recreate genre scores map
               const scoresMap = new Map<string, number>();
               if (profile.genreScores) {
@@ -177,7 +189,7 @@ export default function GenreMap() {
               console.error("Failed to parse stored taste profile:", err);
             }
           }
-          
+
           fetchUserTopArtists(storedToken);
         }
       }
@@ -202,10 +214,10 @@ export default function GenreMap() {
         if (data.refresh_token) {
           localStorage.setItem('spotify_refresh_token', data.refresh_token);
         }
-        
+
         // Build and save taste profile
         await buildAndSaveTasteProfile(data.access_token, data.refresh_token);
-        
+
         fetchUserTopArtists(data.access_token);
         setShowLoginPrompt(false);
       } else {
@@ -217,12 +229,97 @@ export default function GenreMap() {
     }
   };
 
+  const handleLogout = () => {
+    // Clear state
+    setAccessToken(null);
+    setRefreshToken(null);
+    setTasteProfile(null);
+    setUserTopArtists(new Set());
+    setUserTopTracks(new Set());
+    setUserGenres(new Set());
+    setShowUserMenu(false);
+
+    // Clear storage
+    localStorage.removeItem('spotify_access_token');
+    localStorage.removeItem('spotify_refresh_token');
+    localStorage.removeItem('spotify_code_verifier');
+
+    // Redirect to home to clear URL params if any
+    window.location.href = window.location.origin;
+  };
+
   // Automatically fetch expanded artists when a genre is selected if authenticated
   useEffect(() => {
     if (accessToken && selectedGenre) {
       exploreMoreArtists();
     } else {
       setExpandedArtists([]);
+    }
+  }, [selectedGenre, accessToken]);
+
+  // Handle Social Comparison Link
+  useEffect(() => {
+    if (typeof window !== 'undefined') {
+      const urlParams = new URLSearchParams(window.location.search);
+      const compareUserId = urlParams.get('compare');
+
+      if (compareUserId) {
+        console.log("👥 Converting to comparison mode with user:", compareUserId);
+        setComparisonMode(true);
+
+        // Fetch friend's profile
+        fetch(`/api/taste-profile/get?userId=${compareUserId}`)
+          .then(res => {
+            if (!res.ok) throw new Error("Friend profile not found");
+            return res.json();
+          })
+          .then(profile => {
+            console.log("✅ Friend profile loaded:", profile);
+            setFriendProfile(profile);
+
+            // Create map for friend scores
+            const fMap = new Map<string, number>();
+            if (profile.genreScores) {
+              profile.genreScores.forEach((g: any) => fMap.set(g.genre, g.score));
+            }
+            setFriendGenreScoresMap(fMap);
+
+            // Calculate taste match score (simple overlap algorithm)
+            if (tasteProfile?.genreScores) {
+              // Get set of all unique genres
+              const allGenres = new Set([...genreScoresMap.keys(), ...fMap.keys()]);
+              let overlapScore = 0;
+              let totalWeight = 0;
+
+              allGenres.forEach(genre => {
+                const uScore = genreScoresMap.get(genre) || 0;
+                const fScore = fMap.get(genre) || 0;
+                // Add minimum score (intersection)
+                overlapScore += Math.min(uScore, fScore);
+                // Add maximum score (union)
+                totalWeight += Math.max(uScore, fScore);
+              });
+
+              const match = totalWeight > 0 ? (overlapScore / totalWeight) * 100 : 0;
+              setTasteMatchScore(Math.round(match));
+            }
+          })
+          .catch(err => {
+            console.error("Failed to load comparison profile:", err);
+            // Optional: show toast/alert
+          });
+      }
+    }
+  }, [tasteProfile]); // Re-run when OUR profile loads to calc match score
+
+  // Fetch genre-specific tracks and recommendations when a genre is selected
+  useEffect(() => {
+    if (accessToken && selectedGenre) {
+      fetchGenreTracks(selectedGenre.id);
+      fetchGenreRecommendations(selectedGenre.id);
+    } else {
+      setGenreTracks([]);
+      setGenreRecommendations([]);
     }
   }, [selectedGenre, accessToken]);
 
@@ -263,10 +360,10 @@ export default function GenreMap() {
       console.log("✅ Taste profile created:", profile);
       console.log("📊 Genre scores count:", profile.genreScores?.length || 0);
       console.log("🎯 Top genres:", profile.topGenres);
-      
+
       // Store the profile locally for immediate use
       setTasteProfile(profile);
-      
+
       // Create a genre scores map for quick lookup
       const scoresMap = new Map<string, number>();
       if (profile.genreScores) {
@@ -277,9 +374,23 @@ export default function GenreMap() {
       console.log("📍 Genre scores map size:", scoresMap.size);
       console.log("🔝 Top 5 scored genres:", Array.from(scoresMap.entries()).slice(0, 5));
       setGenreScoresMap(scoresMap);
-      
+
       localStorage.setItem('user_taste_profile', JSON.stringify(profile));
       console.log("💾 Taste profile saved to localStorage");
+
+      // Extract user genres for highlighting
+      if (profile.topGenres && profile.topGenres.length > 0) {
+        const genres = new Set<string>(profile.topGenres);
+        console.log("🎨 User genres extracted for highlighting:", genres.size);
+        setUserGenres(genres);
+      }
+
+      // Extract user top track IDs for personalized recommendations
+      if (profile.topTrackIds && profile.topTrackIds.length > 0) {
+        const trackIds = new Set<string>(profile.topTrackIds);
+        console.log("🎵 User track IDs extracted for recommendations:", trackIds.size);
+        setUserTopTracks(trackIds);
+      }
     } catch (err) {
       console.error("❌ Error building taste profile:", err);
     }
@@ -326,15 +437,102 @@ export default function GenreMap() {
     setIsExpanding(true);
     console.log(`Searching Spotify for genre: "${selectedGenre.id}"`);
     try {
-      const response = await fetch(`https://api.spotify.com/v1/search?q=genre:"${selectedGenre.id}"&type=artist&limit=30`, {
+      const response = await fetch(`https://api.spotify.com/v1/search?q=genre:"${encodeURIComponent(selectedGenre.id)}"&type=artist&limit=30`, {
         headers: { Authorization: `Bearer ${accessToken}` }
       });
+
+      if (!response.ok) {
+        console.warn(`Search failed for genre ${selectedGenre.id}: ${response.statusText}`);
+        setExpandedArtists([]);
+        return;
+      }
+
       const data = await response.json();
-      setExpandedArtists(data.artists.items || []);
+      setExpandedArtists(data.artists?.items || []);
     } catch (err) {
       console.error("Search failed", err);
     } finally {
       setIsExpanding(false);
+    }
+  };
+
+  const fetchGenreTracks = async (genre: string) => {
+    if (!accessToken) return;
+
+    // Helper to fetch generic tracks (fallback)
+    const fetchGenericTracks = async () => {
+      try {
+        const response = await fetch(
+          `https://api.spotify.com/v1/search?q=genre:"${encodeURIComponent(genre)}"&type=track&limit=10`,
+          { headers: { Authorization: `Bearer ${accessToken}` } }
+        );
+
+        if (!response.ok) {
+          console.warn(`Generic search failed for genre ${genre}: ${response.statusText}`);
+          setGenreTracks([]);
+          return;
+        }
+
+        const data = await response.json();
+        setGenreTracks(data.tracks?.items || []);
+      } catch (err) {
+        console.error("Failed to fetch generic tracks:", err);
+        setGenreTracks([]);
+      }
+    };
+
+    try {
+      // Build personalized recommendations using BOTH genre and user's top tracks
+      const trackSeedIds = Array.from(userTopTracks).slice(0, 5).join(',');
+
+      let url = `https://api.spotify.com/v1/recommendations?seed_genres=${encodeURIComponent(genre)}&limit=10`;
+
+      // Add user's tracks as seeds if available for better personalization
+      if (trackSeedIds) {
+        url += `&seed_tracks=${trackSeedIds}`;
+      }
+
+      const response = await fetch(url, {
+        headers: { Authorization: `Bearer ${accessToken}` }
+      });
+
+      if (!response.ok) {
+        // Fallback to generic search if recommendation fails (e.g. invalid genre seed)
+        console.warn(`Personalized recs failed (${response.status}), falling back to search for ${genre}`);
+        await fetchGenericTracks();
+        return;
+      }
+
+      const data = await response.json();
+      setGenreTracks(data.tracks || []);
+    } catch (err) {
+      console.error("Failed to fetch personalized tracks:", err);
+      await fetchGenericTracks();
+    }
+  };
+
+  const fetchGenreRecommendations = async (genre: string) => {
+    if (!accessToken) return;
+    try {
+      const response = await fetch(
+        `https://api.spotify.com/v1/recommendations?seed_genres=${encodeURIComponent(genre)}&limit=10`,
+        { headers: { Authorization: `Bearer ${accessToken}` } }
+      );
+
+      if (!response.ok) {
+        // Silently fail for invalid genre seeds to avoid console spam
+        if (response.status !== 404) {
+          console.warn(`Recommendations failed: ${response.status} ${response.statusText}`);
+        }
+        setGenreRecommendations([]);
+        return;
+      }
+
+      const data = await response.json();
+      setGenreRecommendations(data.tracks || []);
+    } catch (err) {
+      console.error("Failed to fetch recommendations:", err);
+      setGenreRecommendations([]);
     }
   };
 
@@ -367,51 +565,104 @@ export default function GenreMap() {
     // Draw nodes
     nodesRef.current.forEach(node => {
       const isMatch = searchQuery && node.id.toLowerCase().includes(searchQuery.toLowerCase());
-      const genreScore = genreScoresMap.get(node.id) || 0; // 0-1 relevance score from user's taste
-      const isRelevant = genreScore > 0.1; // Genre is relevant if score > 0.1
 
-      // Dynamic radius based on search match or genre relevance
+      // Scores
+      const userScore = genreScoresMap.get(node.id) || 0;
+      const friendScore = comparisonMode ? (friendGenreScoresMap.get(node.id) || 0) : 0;
+
+      // Relevance check (either user or friend likes it)
+      const isUserRelevant = userScore > 0.1;
+      const isFriendRelevant = friendScore > 0.1;
+      const isRelevant = isUserRelevant || isFriendRelevant;
+
+      // Dynamic radius and opacity
       let radius = 6;
       let opacity = 0.5;
-      
+
       if (isMatch) {
         radius = 30;
         opacity = 1;
       } else if (isRelevant) {
-        // Scale radius from 8 to 20 based on genre score
-        radius = 8 + genreScore * 12;
-        opacity = 0.6 + genreScore * 0.4;
+        // Size based on maximum relevance
+        const maxScore = Math.max(userScore, friendScore);
+        radius = 8 + maxScore * 14; // Slightly larger for shared
+        opacity = 0.6 + maxScore * 0.4;
       }
 
-      // Base color with taste-based brightness adjustment
-      const baseColor = node.c;
-      const rgb = parseInt(baseColor.replace('#', ''), 16);
-      const r = (rgb >> 16) & 255;
-      const g = (rgb >> 8) & 255;
-      const b = rgb & 255;
-      
-      // Brighten color if genre is relevant to user's taste
-      const brightenFactor = isRelevant ? 1 + genreScore * 0.5 : 1;
-      const brightR = Math.min(255, Math.round(r * brightenFactor));
-      const brightG = Math.min(255, Math.round(g * brightenFactor));
-      const brightB = Math.min(255, Math.round(b * brightenFactor));
-      const displayColor = `rgba(${brightR}, ${brightG}, ${brightB}, ${opacity})`;
+      // Color Logic for Comparison Mode
+      let finalR, finalG, finalB;
+
+      if (comparisonMode && isRelevant) {
+        if (isUserRelevant && isFriendRelevant) {
+          // SHARED TASTE -> Purple (Mix of Cyan and Red)
+          // Approx #A855F7 (Purple 500)
+          finalR = 168; finalG = 85; finalB = 247;
+          opacity = 0.9;
+          radius *= 1.2; // Pop shared nodes more
+        } else if (isUserRelevant) {
+          // USER UNIQUE -> Cyan
+          // Approx #06b6d4 (Cyan 500)
+          finalR = 6; finalG = 182; finalB = 212;
+        } else {
+          // FRIEND UNIQUE -> Strong Red
+          // Approx #FF3232
+          finalR = 255; finalG = 50; finalB = 50;
+        }
+      } else {
+        // Standard Mode (inherit node color but brighten if relevant)
+        const baseColor = node.c;
+        const rgb = parseInt(baseColor.replace('#', ''), 16);
+        let r = (rgb >> 16) & 255;
+        let g = (rgb >> 8) & 255;
+        let b = rgb & 255;
+
+        const brightenFactor = isRelevant ? 1 + userScore * 0.5 : 1;
+        finalR = Math.min(255, Math.round(r * brightenFactor));
+        finalG = Math.min(255, Math.round(g * brightenFactor));
+        finalB = Math.min(255, Math.round(b * brightenFactor));
+      }
+
+      // Grey out logic (applies to both modes)
+      let finalOpacity = opacity;
+
+      if ((accessToken || comparisonMode) && !isRelevant && !isMatch) {
+        const grey = Math.round(finalR * 0.299 + finalG * 0.587 + finalB * 0.114);
+        finalR = grey;
+        finalG = grey;
+        finalB = grey;
+        finalOpacity = 0.1;
+        radius = radius * 0.7;
+      }
+
+      const displayColor = `rgba(${finalR}, ${finalG}, ${finalB}, ${finalOpacity})`;
 
       ctx.fillStyle = displayColor;
       ctx.beginPath();
       ctx.arc(node.x!, node.y!, radius / transform.current.scale, 0, Math.PI * 2);
       ctx.fill();
 
+      // Text rendering
       if (transform.current.scale > 0.4 || isMatch) {
         ctx.font = `${14 / transform.current.scale}px Inter, sans-serif`;
         ctx.textAlign = 'center';
-        ctx.fillStyle = isRelevant ? `rgba(${brightR}, ${brightG}, ${brightB}, 1)` : `rgba(255, 255, 255, 0.7)`;
+
+        let textOpacity = 0.7;
+        let textColor = `rgba(255, 255, 255, ${textOpacity})`;
+
+        if (isRelevant) {
+          textColor = `rgba(${finalR}, ${finalG}, ${finalB}, 1)`;
+        } else if ((accessToken || comparisonMode) && !isMatch) {
+          textOpacity = 0.2;
+          textColor = `rgba(255, 255, 255, ${textOpacity})`;
+        }
+
+        ctx.fillStyle = textColor;
         ctx.fillText(node.id, node.x!, node.y! + (18 / transform.current.scale));
       }
     });
 
     ctx.restore();
-  }, [loading, searchQuery]);
+  }, [loading, searchQuery, genreScoresMap, friendGenreScoresMap, comparisonMode, accessToken]);
 
   useEffect(() => {
     let rafId: number;
@@ -541,11 +792,11 @@ export default function GenreMap() {
       <div className="pointer-events-none absolute inset-0 flex flex-col justify-between p-8">
         <div className="pointer-events-auto flex items-start justify-between">
           <div className="glass-panel p-6 rounded-2xl bg-zinc-900/40 backdrop-blur-2xl border border-white/10 shadow-2xl">
-            <h1 className="text-5xl font-extrabold tracking-tighter bg-linear-to-b from-white via-white to-zinc-600 bg-clip-text text-transparent">Every Noise</h1>
-            <p className="text-zinc-500 text-[10px] uppercase tracking-[0.5em] mt-2 font-bold italic">Interactive Physics Graph</p>
+            <h1 className="text-5xl font-extrabold tracking-tighter bg-linear-to-b from-white via-white to-zinc-600 bg-clip-text text-transparent">Muses</h1>
+            <p className="text-zinc-500 text-[10px] uppercase tracking-[0.5em] mt-2 font-bold italic">Discover your taste</p>
           </div>
 
-          <div className="flex flex-col items-end gap-2">
+          <div className="flex items-center gap-4">
             <input
               type="text"
               placeholder="GENRE SEARCH..."
@@ -553,12 +804,76 @@ export default function GenreMap() {
               onChange={(e) => setSearchQuery(e.target.value)}
               className="w-72 border-white/5 bg-zinc-900/60 px-6 py-3 text-xs tracking-widest backdrop-blur-xl focus:outline-none focus:ring-1 focus:ring-white/30 rounded-full transition-all hover:bg-zinc-800/60 placeholder:text-zinc-700 font-mono"
             />
-            {accessToken && (
+
+            {/* User Profile / Login in Header */}
+            {accessToken ? (
+              <div className="relative">
+                <button
+                  onClick={() => setShowUserMenu(!showUserMenu)}
+                  className="flex items-center gap-3 pl-2 pr-4 py-1.5 bg-zinc-900/60 hover:bg-zinc-800/80 backdrop-blur-xl border border-white/5 rounded-full transition-all group"
+                >
+                  <div className="h-8 w-8 rounded-full bg-gradient-to-br from-cyan-500 to-blue-600 flex items-center justify-center text-white font-black text-xs shadow-lg ring-2 ring-black group-hover:ring-white/20 transition-all">
+                    {tasteProfile?.displayName ? tasteProfile.displayName[0].toUpperCase() : "U"}
+                  </div>
+                  <div className="text-left hidden sm:block">
+                    <div className="text-[10px] font-bold text-white group-hover:text-cyan-300 transition-colors truncate max-w-[100px]">
+                      {tasteProfile?.displayName || "User"}
+                    </div>
+                  </div>
+                  <svg
+                    viewBox="0 0 24 24"
+                    width="12"
+                    height="12"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="2"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    className={`text-zinc-500 transition-transform duration-300 ${showUserMenu ? 'rotate-180' : ''}`}
+                  >
+                    <polyline points="6 9 12 15 18 9"></polyline>
+                  </svg>
+                </button>
+
+                {showUserMenu && (
+                  <div className="absolute top-full right-0 mt-2 w-56 bg-zinc-900 border border-white/10 rounded-xl shadow-2xl overflow-hidden animate-in fade-in slide-in-from-top-2 z-50">
+                    <button
+                      onClick={() => {
+                        if (tasteProfile) {
+                          const link = `${window.location.origin}?compare=${tasteProfile.userId}`;
+                          navigator.clipboard.writeText(link);
+                          setShowUserMenu(false);
+                          alert("Link copied!");
+                        }
+                      }}
+                      className="w-full text-left px-4 py-3 text-[10px] font-bold uppercase tracking-widest text-zinc-400 hover:text-white hover:bg-white/5 flex items-center gap-3 transition-colors border-b border-white/5"
+                    >
+                      <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                        <circle cx="18" cy="5" r="3"></circle>
+                        <circle cx="6" cy="12" r="3"></circle>
+                        <circle cx="18" cy="19" r="3"></circle>
+                        <line x1="8.59" y1="13.51" x2="15.42" y2="17.49"></line>
+                        <line x1="15.41" y1="6.51" x2="8.59" y2="10.49"></line>
+                      </svg>
+                      Share Profile
+                    </button>
+                    <button
+                      onClick={handleLogout}
+                      className="w-full text-left px-4 py-3 text-[10px] font-bold uppercase tracking-widest text-red-400 hover:text-red-300 hover:bg-red-500/10 flex items-center gap-3 transition-colors"
+                    >
+                      <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"></path><polyline points="16 17 21 12 16 7"></polyline><line x1="21" y1="12" x2="9" y2="12"></line></svg>
+                      Log Out
+                    </button>
+                  </div>
+                )}
+              </div>
+            ) : (
               <button
-                onClick={handleSpotifyLogout}
-                className="text-[8px] uppercase tracking-[0.3em] text-zinc-600 hover:text-zinc-400 transition-colors mt-2 mr-4 font-bold"
+                onClick={() => setShowLoginPrompt(true)}
+                className="flex items-center gap-2 px-6 py-3 bg-[#1DB954] hover:bg-[#1ed760] text-black font-black uppercase tracking-[0.2em] text-[10px] rounded-full transition-all shadow-[0_0_20px_rgba(29,185,84,0.3)] hover:shadow-[0_0_30px_rgba(29,185,84,0.5)]"
               >
-                Disconnect Spotify
+                <svg viewBox="0 0 24 24" width="14" height="14" fill="black"><path d="M12 0C5.373 0 0 5.373 0 12s5.373 12 12 12 12-5.373 12-12S17.627 0 12 0zm5.49 17.306c-.215.353-.674.463-1.026.248-2.846-1.738-6.427-2.13-10.647-1.168-.403.093-.813-.157-.905-.56-.092-.403.157-.813.56-.905 4.624-1.057 8.575-.61 11.77 1.343.352.215.462.674.248 1.026zm1.465-3.264c-.27.439-.844.58-1.284.31-3.257-2-8.223-2.583-12.073-1.414-.495.15-.494.15-.644-.344-.15-.494.15-.644-.643 4.397-1.334 9.873-.67 13.647 1.65.44.27.58.844.31 1.284zm.126-3.414c-3.906-2.32-10.334-2.533-14.075-1.397-.597.18-.596.18-.777-.417-.18-.597.18-.596.777-.777 4.298-1.304 11.404-1.053 15.93 1.631.54.32.71.1.39.64-.32.54-.1.71-.64.39z" /></svg>
+                Connect Spotify
               </button>
             )}
           </div>
@@ -581,15 +896,37 @@ export default function GenreMap() {
             )}
           </div>
 
-          <div className="text-right text-[10px] text-zinc-600 uppercase tracking-[0.2em] mb-4 font-black">
-            Scroll to zoom <span className="mx-3 opacity-20">|</span> Drag nodes to interact <span className="mx-3 opacity-20">|</span> Click to explore
+          <div className="flex flex-col items-end gap-6">
+            {comparisonMode && friendProfile && (
+              <div className="bg-zinc-900/60 p-4 backdrop-blur-2xl rounded-2xl border border-white/10 shadow-xl">
+                <h3 className="text-[10px] uppercase tracking-[0.3em] text-zinc-500 font-bold mb-3 text-right">Taste Map Legend</h3>
+                <div className="flex flex-col gap-2">
+                  <div className="flex items-center gap-2 justify-end">
+                    <span className="text-[10px] font-bold text-zinc-300 uppercase tracking-widest">You</span>
+                    <div className="h-3 w-3 rounded-full bg-cyan-500 shadow-[0_0_10px_rgba(6,182,212,0.5)] border border-cyan-400/50" />
+                  </div>
+                  <div className="flex items-center gap-2 justify-end">
+                    <span className="text-[10px] font-bold text-zinc-300 uppercase tracking-widest">{friendProfile.displayName.split(' ')[0]}</span>
+                    <div className="h-3 w-3 rounded-full bg-[#FF3232] shadow-[0_0_10px_rgba(255,50,50,0.5)] border border-red-500/50" />
+                  </div>
+                  <div className="flex items-center gap-2 justify-end">
+                    <span className="text-[10px] font-bold text-zinc-300 uppercase tracking-widest">Shared</span>
+                    <div className="h-3 w-3 rounded-full bg-purple-500 shadow-[0_0_10px_rgba(168,85,247,0.5)] border border-purple-400/50" />
+                  </div>
+                </div>
+              </div>
+            )}
+
+            <div className="text-right text-[10px] text-zinc-600 uppercase tracking-[0.2em] mb-4 font-black">
+              Scroll to zoom <span className="mx-3 opacity-20">|</span> Drag nodes to interact <span className="mx-3 opacity-20">|</span> Click to explore
+            </div>
           </div>
         </div>
       </div>
 
       {/* Detail Panel */}
       {selectedGenre && (
-        <div className="absolute right-0 top-0 h-full w-100 bg-zinc-950/80 backdrop-blur-3xl border-l border-white/10 p-10 overflow-y-auto z-40 animate-slide-in">
+        <div className="absolute right-0 top-0 h-full w-100 bg-zinc-950/80 backdrop-blur-3xl border-l border-white/10 pl-10 pr-10 pt-10 overflow-y-auto z-40 animate-slide-in">
           <button
             onClick={() => setSelectedGenre(null)}
             className="absolute top-8 right-8 text-zinc-500 hover:text-white transition-colors"
@@ -618,14 +955,14 @@ export default function GenreMap() {
                     <div
                       className="h-full bg-white transition-all duration-1000"
                       style={{
-                        width: key === 'Tempo' ? `${(val as number / 220) * 100}%` : (key === 'Loudness' ? `${(Math.abs(val as number) / 60) * 100}%` : `${(val as number) * 100}%`),
+                        width: key === 'Tempo' ? `${((val as number) / 220) * 100}%` : (key === 'Loudness' ? `${(Math.abs(val as number) / 60) * 100}%` : `${(val as number) * 100}%`),
                         opacity: 0.3 + (Math.random() * 0.7)
                       }}
                     />
                   </div>
                 </div>
               ))}
-              {!selectedGenre.features || Object.keys(selectedGenre.features).length === 0 && (
+              {(!selectedGenre.features || Object.keys(selectedGenre.features).length === 0) && (
                 <p className="text-zinc-700 text-xs italic">Awaiting further cosmic analysis...</p>
               )}
             </div>
@@ -677,83 +1014,255 @@ export default function GenreMap() {
             </section>
           )}
 
-          <section>
-            <h3 className="text-[10px] uppercase tracking-[0.3em] text-zinc-600 font-black mb-6">
-              {accessToken ? "Verified Spotify Artists" : "Static Historical Artists"}
-            </h3>
-            <div className="flex flex-wrap gap-2">
-              {!accessToken ? (
-                selectedGenre.topArtists?.map((artist, i) => (
-                  <span
-                    key={i}
-                    className="px-4 py-2 bg-white/5 hover:bg-white/10 rounded-full text-[11px] text-zinc-300 transition-colors border border-white/5 font-medium"
-                  >
-                    {artist}
-                  </span>
-                ))
-              ) : (
-                <div className="w-full space-y-3">
-                  {isExpanding ? (
-                    <div className="flex flex-col gap-3">
-                      {[1, 2, 3].map(i => (
-                        <div key={i} className="h-14 w-full bg-white/5 animate-pulse rounded-xl" />
-                      ))}
-                    </div>
-                  ) : (
-                    expandedArtists.map((artist, i) => {
-                      const hasListened = userTopArtists.has(artist.name);
-                      return (
-                        <div
-                          key={i}
-                          className={`group flex items-center gap-4 p-3 rounded-xl border border-white/5 transition-all ${hasListened ? 'bg-cyan-500/10 border-cyan-500/20' : 'bg-white/5 grayscale opacity-60 hover:grayscale-0 hover:opacity-100'
-                            }`}
-                        >
-                          {artist.images?.[0]?.url && (
-                            <img src={artist.images[0].url} className="h-10 w-10 rounded-full object-cover shadow-2xl" alt="" />
-                          )}
-                          <div className="flex-1">
-                            <p className={`text-xs font-bold tracking-tight ${hasListened ? 'text-cyan-400' : 'text-zinc-300'}`}>
-                              {artist.name}
-                            </p>
-                            <div className="flex items-center gap-2 mt-0.5">
-                              <p className="text-[9px] text-zinc-600 uppercase tracking-widest">
-                                Pop: {Math.round(artist.popularity)}
-                              </p>
-                              {hasListened && (
-                                <div className="px-1.5 py-0.5 bg-cyan-500/20 text-cyan-400 text-[7px] font-black uppercase tracking-widest rounded-sm border border-cyan-400/20">
-                                  Your Radar
-                                </div>
-                              )}
+          {/* Artists Listened To (Personal & Social) - MOVED UP */}
+          <div className="mb-12">
+            {(() => {
+              if (!selectedGenre) return null;
+              const genreIdLower = selectedGenre.id.toLowerCase();
+
+              // Improved matching for Spotify genres
+              const isGenreMatch = (artistGenres: string[], target: string) => {
+                if (!artistGenres) return false;
+                return artistGenres.some(g => {
+                  const gl = g.toLowerCase();
+                  return gl === target || gl.includes(target) || target.includes(gl);
+                });
+              };
+
+              const myArtists = tasteProfile?.topArtistsWithGenres?.filter((a: any) =>
+                isGenreMatch(a.genres, genreIdLower)
+              ) || [];
+
+              const friendArtists = friendProfile?.topArtistsWithGenres?.filter((a: any) =>
+                isGenreMatch(a.genres, genreIdLower)
+              ) || [];
+
+              const seenNames = new Set([
+                ...myArtists.map((a: any) => a.name.toLowerCase()),
+                ...friendArtists.map((a: any) => a.name.toLowerCase())
+              ]);
+
+              const newFromSearch = expandedArtists.filter(a => !seenNames.has(a.name.toLowerCase()));
+
+              return (
+                <div className="space-y-12">
+                  {/* Your Artists */}
+                  {myArtists.length > 0 && (
+                    <section>
+                      <h3 className="text-[10px] uppercase tracking-[0.3em] text-cyan-400 font-black mb-6 flex items-center gap-2">
+                        <svg viewBox="0 0 24 24" width="12" height="12" fill="currentColor">
+                          <path d="M12 21.35l-1.45-1.32C5.4 15.36 2 12.28 2 8.5 2 5.42 4.42 3 7.5 3c1.74 0 3.41.81 4.5 2.09C13.09 3.81 14.76 3 16.5 3 19.58 3 22 5.42 22 8.5c0 3.78-3.4 6.86-8.55 11.54L12 21.35z" />
+                        </svg>
+                        Artists You Listen To
+                      </h3>
+                      <div className="space-y-3">
+                        {myArtists.map((artist: any, i: number) => (
+                          <div key={i} className="group flex items-center gap-4 p-3 rounded-xl bg-cyan-500/10 border border-cyan-500/30 hover:bg-cyan-500/20 transition-all">
+                            {artist.images && artist.images[0]?.url ? (
+                              <img src={artist.images[0].url} className="h-10 w-10 rounded-full object-cover shadow-2xl ring-2 ring-cyan-500/30" alt="" />
+                            ) : (
+                              <div className="h-10 w-10 rounded-full bg-cyan-900/50 flex items-center justify-center text-cyan-300 font-bold text-xs ring-2 ring-cyan-500/30">
+                                {artist.name[0]}
+                              </div>
+                            )}
+                            <div className="flex-1">
+                              <p className="text-xs font-bold tracking-tight text-cyan-300">{artist.name}</p>
+                              <div className="flex items-center gap-2 mt-0.5">
+                                <span className="text-[9px] text-cyan-600 uppercase tracking-widest">
+                                  {artist.popularity ? `Pop: ${Math.round(artist.popularity)}` : 'Top Artist'}
+                                </span>
+                                <div className="px-1.5 py-0.5 bg-cyan-500/30 text-cyan-300 text-[7px] font-black uppercase tracking-widest rounded-sm">Your Radar</div>
+                              </div>
                             </div>
                           </div>
-                        </div>
-                      );
-                    })
+                        ))}
+                      </div>
+                    </section>
+                  )}
+
+                  {/* Friend's Artists */}
+                  {comparisonMode && friendProfile && friendArtists.length > 0 && (
+                    <section>
+                      <h3 className="text-[10px] uppercase tracking-[0.3em] text-[#FF3232] font-black mb-6 flex items-center gap-2">
+                        <svg viewBox="0 0 24 24" width="12" height="12" fill="currentColor">
+                          <circle cx="12" cy="8" r="4" /><path d="M12 14c-4.42 0-8 2.24-8 5v1h16v-1c0-2.76-3.58-5-8-5z" />
+                        </svg>
+                        {friendProfile.displayName.split(' ')[0]}'s Listened To
+                      </h3>
+                      <div className="space-y-3">
+                        {friendArtists.map((artist: any, i: number) => (
+                          <div key={i} className="group flex items-center gap-4 p-3 rounded-xl bg-[#FF3232]/10 border border-[#FF3232]/30 hover:bg-[#FF3232]/20 transition-all">
+                            {artist.images && artist.images[0]?.url ? (
+                              <img src={artist.images[0].url} className="h-10 w-10 rounded-full object-cover shadow-2xl ring-2 ring-red-500/30" alt="" />
+                            ) : (
+                              <div className="h-10 w-10 rounded-full bg-red-950/50 flex items-center justify-center text-red-300 font-bold text-xs ring-2 ring-red-500/30">
+                                {artist.name[0]}
+                              </div>
+                            )}
+                            <div className="flex-1">
+                              <p className="text-xs font-bold tracking-tight text-red-300">{artist.name}</p>
+                              <div className="flex items-center gap-2 mt-0.5">
+                                <span className="text-[9px] text-red-600 uppercase tracking-widest">
+                                  {artist.popularity ? `Pop: ${Math.round(artist.popularity)}` : 'Top Artist'}
+                                </span>
+                              </div>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </section>
+                  )}
+
+                  {/* Search Discovery (Kept at bottom of artists block) */}
+                  {accessToken && !isExpanding && newFromSearch.length > 0 && (
+                    <section>
+                      <h3 className="text-[10px] uppercase tracking-[0.3em] text-zinc-600 font-black mb-6">Explore More {selectedGenre.id}</h3>
+                      <div className="w-full space-y-3">
+                        {newFromSearch.slice(0, 5).map((artist: any, i: number) => (
+                          <div key={i} className="group flex items-center gap-4 p-3 rounded-xl bg-white/5 border border-white/5 grayscale opacity-60 hover:grayscale-0 hover:opacity-100 hover:bg-white/10 transition-all">
+                            {artist.images && artist.images[0]?.url ? (
+                              <img src={artist.images[0].url} className="h-10 w-10 rounded-full object-cover shadow-2xl" alt="" />
+                            ) : (
+                              <div className="h-10 w-10 rounded-full bg-white/10 flex items-center justify-center text-zinc-500 font-bold text-xs">
+                                {artist.name[0]}
+                              </div>
+                            )}
+                            <div className="flex-1">
+                              <p className="text-xs font-bold tracking-tight text-zinc-300">{artist.name}</p>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </section>
+                  )}
+
+                  {/* Loading State for Discovery */}
+                  {isExpanding && (
+                    <section>
+                      <h3 className="text-[10px] uppercase tracking-[0.3em] text-zinc-600 font-black mb-6">Loading Discovery...</h3>
+                      <div className="flex flex-col gap-3">
+                        {[1, 2, 3].map(i => (<div key={i} className="h-14 w-full bg-white/5 animate-pulse rounded-xl" />))}
+                      </div>
+                    </section>
                   )}
                 </div>
-              )}
-              {!accessToken && !selectedGenre.topArtists?.length && (
-                <p className="text-zinc-700 text-xs italic">Exploring unknown creators...</p>
-              )}
-            </div>
-          </section>
+              );
+            })()}
+          </div>
 
-          {!accessToken && (
-            <button
-              onClick={() => setShowLoginPrompt(true)}
-              className="w-full mt-10 py-4 bg-[#1DB954] text-black font-black uppercase tracking-[0.2em] text-[10px] rounded-xl hover:bg-[#1ed760] transition-all flex items-center justify-center gap-2 shadow-[0_10px_30px_rgba(29,185,84,0.2)]"
-            >
-              <svg viewBox="0 0 24 24" width="16" height="16" fill="black"><path d="M12 0C5.373 0 0 5.373 0 12s5.373 12 12 12 12-5.373 12-12S17.627 0 12 0zm5.49 17.306c-.215.353-.674.463-1.026.248-2.846-1.738-6.427-2.13-10.647-1.168-.403.093-.813-.157-.905-.56-.092-.403.157-.813.56-.905 4.624-1.057 8.575-.61 11.77 1.343.352.215.462.674.248 1.026zm1.465-3.264c-.27.439-.844.58-1.284.31-3.257-2-8.223-2.583-12.073-1.414-.495.15-.494.15-.644-.344-.15-.494.15-.493.644-.643 4.397-1.334 9.873-.67 13.647 1.65.44.27.58.844.31 1.284zm.126-3.414c-3.906-2.32-10.334-2.533-14.075-1.397-.597.18-.596.18-.777-.417-.18-.597.18-.596.777-.777 4.298-1.304 11.404-1.053 15.93 1.631.54.32.71.1.39.64-.32.54-.1.71-.64.39z" /></svg>
-              Connect Spotify to Fix Data
-            </button>
+          {/* Personalized Track Recommendations */}
+          {accessToken && genreTracks.length > 0 && (
+            <section className="mb-12">
+              <h3 className="text-[10px] uppercase tracking-[0.3em] text-purple-400 font-black mb-2 flex items-center gap-2">
+                <svg viewBox="0 0 24 24" width="12" height="12" fill="currentColor">
+                  <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-2 14.5v-9l6 4.5-6 4.5z" />
+                </svg>
+                Recommended For You
+              </h3>
+              <p className="text-[9px] text-zinc-500 mb-4 italic">Based on your taste + {selectedGenre.id}</p>
+              <div className="space-y-2">
+                {genreTracks.slice(0, 5).map((track: any, i: number) => (
+                  <div
+                    key={i}
+                    className="group flex items-center gap-3 p-2 rounded-lg bg-white/5 hover:bg-white/10 border border-white/5 transition-all"
+                  >
+                    {track.album?.images?.[0]?.url && (
+                      <img src={track.album.images[0].url} className="h-10 w-10 rounded object-cover shadow-lg" alt="" />
+                    )}
+                    <div className="flex-1 min-w-0">
+                      <p className="text-[11px] font-bold text-white truncate">{track.name}</p>
+                      <p className="text-[9px] text-zinc-500 truncate">
+                        {track.artists?.map((a: any) => a.name).join(', ')}
+                      </p>
+                    </div>
+                    {track.preview_url && (
+                      <button
+                        className="opacity-0 group-hover:opacity-100 transition-opacity p-1.5 rounded-full bg-white/10 hover:bg-white/20"
+                        onClick={() => {
+                          const audio = new Audio(track.preview_url);
+                          audio.play();
+                        }}
+                      >
+                        <svg viewBox="0 0 24 24" width="12" height="12" fill="currentColor">
+                          <path d="M8 5v14l11-7z" />
+                        </svg>
+                      </button>
+                    )}
+                  </div>
+                ))}
+              </div>
+            </section>
           )}
 
+          {/* Discover More Like This (Recommendations) */}
+          {accessToken && genreRecommendations.length > 0 && (
+            <section className="mb-12">
+              <h3 className="text-[10px] uppercase tracking-[0.3em] text-cyan-400 font-black mb-6 flex items-center gap-2">
+                <div className="w-1.5 h-1.5 rounded-full bg-cyan-400 animate-pulse" />
+                Discover More Like This
+              </h3>
+              <div className="space-y-2">
+                {genreRecommendations.slice(0, 5).map((track: any, i: number) => (
+                  <div
+                    key={i}
+                    className="group flex items-center gap-3 p-2 rounded-lg bg-cyan-500/5 hover:bg-cyan-500/10 border border-cyan-500/20 transition-all"
+                  >
+                    {track.album?.images?.[0]?.url && (
+                      <img src={track.album.images[0].url} className="h-10 w-10 rounded object-cover shadow-lg" alt="" />
+                    )}
+                    <div className="flex-1 min-w-0">
+                      <p className="text-[11px] font-bold text-cyan-300 truncate">{track.name}</p>
+                      <p className="text-[9px] text-cyan-600 truncate">
+                        {track.artists?.map((a: any) => a.name).join(', ')}
+                      </p>
+                    </div>
+                    {track.preview_url && (
+                      <button
+                        className="opacity-0 group-hover:opacity-100 transition-opacity p-1.5 rounded-full bg-cyan-500/20 hover:bg-cyan-500/30"
+                        onClick={() => {
+                          const audio = new Audio(track.preview_url);
+                          audio.play();
+                        }}
+                      >
+                        <svg viewBox="0 0 24 24" width="12" height="12" fill="currentColor">
+                          <path d="M8 5v14l11-7z" />
+                        </svg>
+                      </button>
+                    )}
+                  </div>
+                ))}
+              </div>
+            </section>
+          )}
+
+          {/* Share Button (Sticky Bottom) */}
+          {accessToken && !comparisonMode && tasteProfile && (
+            <div className="mt-auto pt-6 border-t border-white/10 sticky bottom-0 bg-zinc-950 z-50 pb-4 -mx-10 px-10 shadow-[0_-10px_20px_rgba(0,0,0,0.5)]">
+              <button
+                onClick={() => {
+                  const link = `${window.location.origin}?compare=${tasteProfile.userId}`;
+                  navigator.clipboard.writeText(link);
+                  alert("Link copied! Send it to a friend to compare tastes.");
+                }}
+                className="w-full py-4 bg-gradient-to-r from-cyan-500 to-blue-500 hover:from-cyan-400 hover:to-blue-400 rounded-xl text-xs font-black uppercase tracking-widest transition-all flex items-center justify-center gap-2 group shadow-lg shadow-cyan-500/20"
+              >
+                <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" className="group-hover:scale-110 transition-transform">
+                  <circle cx="18" cy="5" r="3"></circle>
+                  <circle cx="6" cy="12" r="3"></circle>
+                  <circle cx="18" cy="19" r="3"></circle>
+                  <line x1="8.59" y1="13.51" x2="15.42" y2="17.49"></line>
+                  <line x1="15.41" y1="6.51" x2="8.59" y2="10.49"></line>
+                </svg>
+                Share Your Taste
+              </button>
+            </div>
+          )}
         </div>
       )}
 
       {/* Login Prompt Modal */}
       {showLoginPrompt && (
-        <div className="absolute inset-0 flex items-center justify-center bg-black/90 backdrop-blur-xl z-60 p-6 text-center animate-in fade-in duration-300">
+        <div className="absolute inset-0 flex items-center justify-center bg-black/90 backdrop-blur-xl z-[100] p-6 text-center animate-in fade-in duration-300">
           <div className="max-w-md p-12 rounded-[3rem] bg-zinc-900 border border-white/10 shadow-[0_0_100px_rgba(0,0,0,0.8)]">
             <div className="h-20 w-20 bg-[#1DB954]/10 rounded-full flex items-center justify-center mx-auto mb-8 border border-[#1DB954]/20">
               <svg viewBox="0 0 24 24" width="40" height="40" fill="#1DB954"><path d="M12 0C5.373 0 0 5.373 0 12s5.373 12 12 12 12-5.373 12-12S17.627 0 12 0zm5.49 17.306c-.215.353-.674.463-1.026.248-2.846-1.738-6.427-2.13-10.647-1.168-.403.093-.813-.157-.905-.56-.092-.403.157-.813.56-.905 4.624-1.057 8.575-.61 11.77 1.343.352.215.462.674.248 1.026zm1.465-3.264c-.27.439-.844.58-1.284.31-3.257-2-8.223-2.583-12.073-1.414-.495.15-.494.15-.644-.344-.15-.494.15-.493.644-.643 4.397-1.334 9.873-.67 13.647 1.65.44.27.58.844.31 1.284zm.126-3.414c-3.906-2.32-10.334-2.533-14.075-1.397-.597.18-.596.18-.777-.417-.18-.597.18-.596.777-.777 4.298-1.304 11.404-1.053 15.93 1.631.54.32.71.1.39.64-.32.54-.1.71-.64.39z" /></svg>

@@ -125,8 +125,10 @@ export async function POST(request: NextRequest) {
       displayName,
       genreCount: genreScores.length,
       topGenres: genreScores.slice(0, 10).map((g) => g.genre),
+      topTrackIds: topTrackIds.slice(0, 5), // Return top 5 track IDs for recommendations
       audioFeatures: averageAudioFeatures,
       genreScores: genreScores.slice(0, 100),
+      topArtistsWithGenres: topArtistsWithGenres,
     });
   } catch (error) {
     console.error("Error building taste profile:", error);
