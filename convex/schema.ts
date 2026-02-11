@@ -44,4 +44,12 @@ export default defineSchema({
   })
     .index("by_userId", ["userId"])
     .index("by_createdAt", ["createdAt"]),
+  
+  waitlist: defineTable({
+    email: v.string(),
+    createdAt: v.number(),
+    source: v.optional(v.string()), // e.g., "spotify_connect", "landing_page"
+  })
+    .index("by_email", ["email"])
+    .index("by_createdAt", ["createdAt"]),
 });

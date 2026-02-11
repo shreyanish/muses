@@ -51,6 +51,8 @@ export default function GenreMap() {
   const [expandedArtists, setExpandedArtists] = useState<any[]>([]);
   const [isExpanding, setIsExpanding] = useState(false);
   const [showLoginPrompt, setShowLoginPrompt] = useState(false);
+  const [showWaitlistForm, setShowWaitlistForm] = useState(false);
+  const [waitlistEmail, setWaitlistEmail] = useState("");
   const [genreTracks, setGenreTracks] = useState<any[]>([]);
   const [genreRecommendations, setGenreRecommendations] = useState<any[]>([]);
   const [tasteProfile, setTasteProfile] = useState<any>(null);
@@ -267,13 +269,17 @@ export default function GenreMap() {
         console.log("👥 Converting to comparison mode with user:", compareUserId);
         setComparisonMode(true);
 
-        // Fetch friend's profile
         fetch(`/api/taste-profile/get?userId=${compareUserId}`)
           .then(res => {
-            if (!res.ok) throw new Error("Friend profile not found");
+            if (!res.ok) {
+              console.warn("⚠️ Friend profile not found in database. Check the ID in your URL.");
+              setComparisonMode(false);
+              return null;
+            }
             return res.json();
           })
           .then(profile => {
+            if (!profile) return;
             console.log("✅ Friend profile loaded:", profile);
             setFriendProfile(profile);
 
@@ -425,6 +431,39 @@ export default function GenreMap() {
     setGenreScoresMap(new Map());
     setExpandedArtists([]);
   };
+
+  const handleWaitlistSubmit = async () => {
+    if (!waitlistEmail || !waitlistEmail.includes('@')) {
+      alert('Please enter a valid email address');
+      return;
+    }
+
+    try {
+      const response = await fetch('/api/waitlist/add', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          email: waitlistEmail,
+          source: 'spotify_connect'
+        }),
+      });
+
+      const data = await response.json();
+
+      if (data.success) {
+        alert('🎉 You\'re on the waitlist! We\'ll notify you when Muses launches.');
+        setShowWaitlistForm(false);
+        setShowLoginPrompt(false);
+        setWaitlistEmail('');
+      } else {
+        alert(data.message || 'Failed to join waitlist');
+      }
+    } catch (err) {
+      console.error('Waitlist submission error:', err);
+      alert('Failed to join waitlist. Please try again.');
+    }
+  };
+
 
   const exploreMoreArtists = async () => {
     if (!accessToken) {
@@ -1066,7 +1105,7 @@ export default function GenreMap() {
                 </div>
 
                 <button
-                  onClick={handleSpotifyLogin}
+                  onClick={() => setShowLoginPrompt(true)}
                   className="w-full py-4 bg-white text-black hover:bg-zinc-200 rounded-2xl text-xs font-black uppercase tracking-widest transition-all flex items-center justify-center gap-3 group/btn"
                 >
                   <svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor">
@@ -1328,27 +1367,85 @@ export default function GenreMap() {
       )}
 
       {/* Login Prompt Modal */}
-      {showLoginPrompt && (
+      {showLoginPrompt && !showWaitlistForm && (
         <div className="absolute inset-0 flex items-center justify-center bg-black/90 backdrop-blur-xl z-[100] p-6 text-center animate-in fade-in duration-300">
           <div className="max-w-md p-12 rounded-[3rem] bg-zinc-900 border border-white/10 shadow-[0_0_100px_rgba(0,0,0,0.8)]">
             <div className="h-20 w-20 bg-[#1DB954]/10 rounded-full flex items-center justify-center mx-auto mb-8 border border-[#1DB954]/20">
               <svg viewBox="0 0 24 24" width="40" height="40" fill="#1DB954"><path d="M12 0C5.373 0 0 5.373 0 12s5.373 12 12 12 12-5.373 12-12S17.627 0 12 0zm5.49 17.306c-.215.353-.674.463-1.026.248-2.846-1.738-6.427-2.13-10.647-1.168-.403.093-.813-.157-.905-.56-.092-.403.157-.813.56-.905 4.624-1.057 8.575-.61 11.77 1.343.352.215.462.674.248 1.026zm1.465-3.264c-.27.439-.844.58-1.284.31-3.257-2-8.223-2.583-12.073-1.414-.495.15-.494.15-.644-.344-.15-.494.15-.493.644-.643 4.397-1.334 9.873-.67 13.647 1.65.44.27.58.844.31 1.284zm.126-3.414c-3.906-2.32-10.334-2.533-14.075-1.397-.597.18-.596.18-.777-.417-.18-.597.18-.596.777-.777 4.298-1.304 11.404-1.053 15.93 1.631.54.32.71.1.39.64-.32.54-.1.71-.64.39z" /></svg>
             </div>
-            <h2 className="text-3xl font-black tracking-tighter mb-4 text-white uppercase italic">Connect Intelligence</h2>
-            <p className="text-zinc-500 text-xs mb-8 leading-relaxed uppercase tracking-widest">To reveal the truth beyond the dataset and see your own footprints in this genre, we need to bridge your Spotify consciousness.</p>
+            <h2 className="text-3xl font-black tracking-tighter mb-4 text-white uppercase italic">Connect to Spotify</h2>
+            <p className="text-zinc-500 text-xs mb-8 leading-relaxed uppercase tracking-widest">Do you already have an account on Muses?</p>
             <div className="flex flex-col gap-4">
               <button
                 type="button"
                 onClick={handleSpotifyLogin}
                 className="w-full py-5 bg-[#1DB954] text-black font-black uppercase tracking-[0.3em] text-[10px] rounded-2xl hover:scale-[1.02] active:scale-[0.98] transition-all"
               >
-                Sync with Spotify
+                Yes, I have an account
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setShowLoginPrompt(false);
+                  setShowWaitlistForm(true);
+                }}
+                className="w-full py-5 bg-zinc-800 text-white font-black uppercase tracking-[0.3em] text-[10px] rounded-2xl hover:scale-[1.02] active:scale-[0.98] transition-all border border-white/10"
+              >
+                No, join waitlist
               </button>
               <button
                 onClick={() => setShowLoginPrompt(false)}
                 className="text-[10px] text-zinc-700 uppercase tracking-widest font-black hover:text-zinc-400 transition-colors"
               >
-                Abort Protocol
+                Cancel
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Waitlist Form Modal */}
+      {showWaitlistForm && (
+        <div className="absolute inset-0 flex items-center justify-center bg-black/90 backdrop-blur-xl z-[100] p-6 text-center animate-in fade-in duration-300">
+          <div className="max-w-md p-12 rounded-[3rem] bg-zinc-900 border border-white/10 shadow-[0_0_100px_rgba(0,0,0,0.8)]">
+            <div className="h-20 w-20 bg-purple-500/10 rounded-full flex items-center justify-center mx-auto mb-8 border border-purple-500/20">
+              <svg viewBox="0 0 24 24" width="40" height="40" fill="none" stroke="#a855f7" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"></path>
+                <polyline points="22,6 12,13 2,6"></polyline>
+              </svg>
+            </div>
+            <h2 className="text-3xl font-black tracking-tighter mb-4 text-white uppercase italic">Join the Waitlist</h2>
+            <p className="text-zinc-500 text-xs mb-8 leading-relaxed uppercase tracking-widest">Enter your email to get early access to Muses</p>
+            <div className="flex flex-col gap-4">
+              <input
+                type="email"
+                placeholder="your@email.com"
+                value={waitlistEmail}
+                onChange={(e) => setWaitlistEmail(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') {
+                    handleWaitlistSubmit();
+                  }
+                }}
+                className="w-full px-6 py-4 bg-zinc-800 text-white border border-white/10 rounded-2xl focus:outline-none focus:ring-2 focus:ring-purple-500/50 text-sm placeholder:text-zinc-600"
+                autoFocus
+              />
+              <button
+                type="button"
+                onClick={handleWaitlistSubmit}
+                className="w-full py-5 bg-purple-600 text-white font-black uppercase tracking-[0.3em] text-[10px] rounded-2xl hover:scale-[1.02] active:scale-[0.98] transition-all hover:bg-purple-500"
+              >
+                Join Waitlist
+              </button>
+              <button
+                onClick={() => {
+                  setShowWaitlistForm(false);
+                  setShowLoginPrompt(true);
+                  setWaitlistEmail('');
+                }}
+                className="text-[10px] text-zinc-700 uppercase tracking-widest font-black hover:text-zinc-400 transition-colors"
+              >
+                Back
               </button>
             </div>
           </div>
